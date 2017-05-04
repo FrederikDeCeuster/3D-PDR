@@ -121,6 +121,10 @@ int calculate_abundances_(realtype *abundance, realtype *rate, realtype *density
 
   /*printf ("npart: %i \n",*npart);*/
 
+/* Start add by Frederik */
+double tot_parallel_loop_time = omp_get_wtime();
+/* Stop add by Frederik */
+
 #ifdef OPENMP
 #pragma omp parallel for default(none) schedule(dynamic) \
   shared(npart, nspec, nreac, nelect, nthread, abundance, rate, density, temperature) \
@@ -216,9 +220,15 @@ int calculate_abundances_(realtype *abundance, realtype *rate, realtype *density
     do { /* Call CVode, check the return status and loop until the end time is reached */
 
       flag = CVode(cvode_mem, tout, y, &t, CV_NORMAL);
+
 #ifdef OPENMP
 #pragma omp critical (status)
 #endif
+
+/* Start add by Frederik */
+double crit_time = omp_get_wtime();
+/* Stop add by Frederik */
+
       if (flag == 0) {
         if (nfails > 0) {
           fprintf(cvoderr, "Call to CVODE successful: particle = %d, t = %8.2le yr, # steps = %ld\n\n", n, t/seconds_in_year, mxstep);
@@ -349,6 +359,34 @@ int calculate_abundances_(realtype *abundance, realtype *rate, realtype *density
     fprintf(stdout, "  --> Threads used = %d (maximum %d)\n", nthread, omp_get_max_threads());
 #endif
   }
+
+/* Start add by Frederik */
+     crit_time = crit_time - omp_get_wtime();
+     tot_parallel_loop_time = tot_parallel_loop_time - omp_get_wtime();
+
+     /* Write time in critical section to crit_time.txt */
+     FILE *f = fopen("crit_time.txt", "w");
+     if (f == NULL)
+     {
+         printf("Error opening file!\n");
+         exit(1);
+     }
+
+     fprintf(f, "%f\n", crit_time);
+     fclose(f);
+
+     /* Write total time in parallel section to par_time.txt */
+     FILE *ff = fopen("par_time.txt", "w");
+     if (ff == NULL)
+     {
+         printf("Error opening file!\n");
+         exit(1);
+     }
+
+     fprintf(ff, "%f\n", tot_parallel_loop_time);
+     fclose(ff);
+
+/* Stop add by Frederik */
 
   return(status);
 }
