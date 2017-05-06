@@ -17,6 +17,13 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
+
+double dsecond(void) {
+  struct timeval tv;
+  gettimeofday(&tv,NULL);
+  return 1.0*tv.tv_sec + 1.0e-6*tv.tv_usec;
+}
 
 /*-----------------------------------------------------------------------*/
 
@@ -122,15 +129,32 @@ int calculate_abundances_(realtype *abundance, realtype *rate, realtype *density
   /*printf ("npart: %i \n",*npart);*/
 
 /* Start add by Frederik */
-double tot_parallel_loop_time = omp_get_wtime();
-/* Stop add by Frederik */
+   double t_enter=0.0;
+   static double t_call =0.0;
+   static double t_leave= 0.0;
+   static double t_cvode=0.0;
+   static double t_crit =0.0;
+   static double t_first= 0.0;
+   static double t_outside= 0.0;
+
+   if ( t_leave == 0.0 ) {
+     t_leave = dsecond();
+     t_first = dsecond();
+   }
+   t_enter= dsecond();
+
+   t_call-= dsecond();
+
+   /* Stop add by Frederik */
 
 #ifdef OPENMP
+   /*
 #pragma omp parallel for default(none) schedule(dynamic) \
   shared(npart, nspec, nreac, nelect, nthread, abundance, rate, density, temperature) \
   shared(neq, start_time, end_time, reltol, abstol, mxstep, status, cvoderr) \
-  shared(seconds_in_year) \
+  shared(seconds_in_year,t_cvode,t_crit)			\
   private(i, t0, tout, t, y, data, user_data, cvode_mem, flag, nfails)
+   */
 #endif
 
   for (n = 0; n < *npart; n++) {
@@ -145,7 +169,6 @@ double tot_parallel_loop_time = omp_get_wtime();
     /* Specify the start and end time of the integration (in seconds) */
     t0 = start_time*seconds_in_year;
     tout = end_time*seconds_in_year;
-
 
     /* Create a serial vector of length NEQ to contain the abundances */
     y = NULL;
@@ -219,16 +242,16 @@ double tot_parallel_loop_time = omp_get_wtime();
 
     do { /* Call CVode, check the return status and loop until the end time is reached */
 
+
+      t_cvode -= dsecond();
       flag = CVode(cvode_mem, tout, y, &t, CV_NORMAL);
+      t_cvode += dsecond();
+
+      t_crit-= dsecond();
 
 #ifdef OPENMP
-#pragma omp critical (status)
+      /* #pragma omp critical (status)*/
 #endif
-
-/* Start add by Frederik */
-double crit_time = omp_get_wtime();
-/* Stop add by Frederik */
-
       if (flag == 0) {
         if (nfails > 0) {
           fprintf(cvoderr, "Call to CVODE successful: particle = %d, t = %8.2le yr, # steps = %ld\n\n", n, t/seconds_in_year, mxstep);
@@ -309,6 +332,8 @@ double crit_time = omp_get_wtime();
         }
       }
 
+      t_crit+= dsecond();
+      
       tout = tout*10;
       if (tout > end_time*seconds_in_year) tout = end_time*seconds_in_year;
 
@@ -337,8 +362,9 @@ double crit_time = omp_get_wtime();
 
   } /* End of for-loop over particles */
 
+
 #ifdef OPENMP
-  cpu_end = omp_get_wtime();
+  cpu_end = dsecond();
 #else
   cpu_end = clock();
 #endif
@@ -360,34 +386,15 @@ double crit_time = omp_get_wtime();
 #endif
   }
 
-/* Start add by Frederik */
-     crit_time = crit_time - omp_get_wtime();
-     tot_parallel_loop_time = tot_parallel_loop_time - omp_get_wtime();
-
-     /* Write time in critical section to crit_time.txt */
-     FILE *f = fopen("crit_time.txt", "w");
-     if (f == NULL)
-     {
-         printf("Error opening file!\n");
-         exit(1);
-     }
-
-     fprintf(f, "%f\n", crit_time);
-     fclose(f);
-
-     /* Write total time in parallel section to par_time.txt */
-     FILE *ff = fopen("par_time.txt", "w");
-     if (ff == NULL)
-     {
-         printf("Error opening file!\n");
-         exit(1);
-     }
-
-     fprintf(ff, "%f\n", tot_parallel_loop_time);
-     fclose(ff);
-
-/* Stop add by Frederik */
-
+  t_call+= dsecond();
+  t_outside+=t_enter-t_leave;
+  fprintf(stdout, " t_total    %le s\n", t_leave-t_first);
+  fprintf(stdout, " t_call     %le s\n", t_call);
+  fprintf(stdout, " t_cvode    %le s\n", t_cvode);
+  fprintf(stdout, " t_crit     %le s\n", t_crit);
+  fprintf(stdout, " t_outside  %le s\n", t_outside);
+  
+  t_leave=dsecond();
   return(status);
 }
 /*=======================================================================*/
@@ -457,7 +464,7 @@ static void PrintFinalStatistics(void *cvode_mem)
   check_flag(&flag, "CVDlsGetNumRhsEvals", 1);
 
 #ifdef OPENMP
-#pragma omp critical (statistics)
+  /*#pragma omp critical (statistics)*/
     printf("\nFinal Statistics (thread %d):\n", omp_get_thread_num());
 #endif
     printf("nst = %-6ld nfe = %-6ld nsetups = %-6ld nfeLS = %-6ld\n",
